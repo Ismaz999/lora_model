@@ -1,18 +1,23 @@
 import torch
+import torchvision
 from torch.utils.data import Dataset
 from PIL import Image
 import os
 from torchvision import transforms
 from torchvision.transforms import ToTensor
+from torchvision.models import resnet50, ResNet50_Weights
+from torch.utils.data import Dataset, Subset, DataLoader
+import matplotlib.pyplot as plt
+
+from flickr8k_manager import CaptionDataset
 
 file = open('captions.txt','r')
-
 file_content = file.readlines()
+file_content = file_content[1:]
 
 image_dict = {}
 image_path = []
 image_annot = []
-
 
 for ligne in file_content:
    parts = ligne.strip().split(',')
@@ -23,36 +28,36 @@ for ligne in file_content:
    image_annot.append(annot)
    image_dict[path] = annot
 
+transform_img = transforms.Compose([transforms.Resize((256,256)),
+                                    transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                                    ])
 
-class CaptionDataset(torch.utils.data.Dataset):
-   def __init__(self, caption_array, image_path, root, transform=None): #Permet d'initialiser les variables avant d'accéder a un élément précis du dataset
-
-      self.caption_array = caption_array
-      self.root = root
-      self.transform = transform
-      self.image_path = image_path
-
-   def __getitem__(self, index): #Permet d'accéder à un élément spécifique du dataset
-      annotation = self.caption_array[index]
-      image_name = self.image_path[index]
-
-      image_path = os.path.join(self.root, image_name)
-
-      img = Image.open(image_path).convert("RGB")
-
-      if self.transform:
-            img = self.transform(img)
-
-      return img, annotation
-   
-   def __len__(self):
-      return len(self.image_path)
-   
 
 root = "C:\\Users\\Audensiel\\Desktop\\piccture_anotation\\Images"   
-dataset = CaptionDataset(image_annot, image_path, root)
-sample_index = 1 
-sample_img, sample_caption = dataset[sample_index]
-print("Sample Caption:", sample_caption)
-print("Sample Image Shape:", sample_img.size)
-sample_img.show()
+dataset = CaptionDataset(image_annot, image_path, root, transform=transform_img)
+
+model_features = torchvision.models.resnet50(weights=ResNet50_Weights.DEFAULT)
+model_features.eval()
+
+test_resnet = Subset(dataset, indices=list(range(50)))
+input_data = DataLoader(test_resnet, batch_size=32, shuffle=False)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+model_features.to(device)
+
+all_outputs = []
+
+with torch.no_grad():
+   for batch_images, batch_captions in input_data:
+      batch_images = batch_images.to(device)
+      batch_outputs = model_features(batch_images)
+
+   for i in range(batch_images.shape[0]):
+      image = batch_images[i].cpu().permute(1, 2, 0)
+      output = batch_outputs[i] 
+            
+      plt.figure()
+      plt.imshow(image)
+      plt.show()
