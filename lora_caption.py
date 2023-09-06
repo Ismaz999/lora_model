@@ -37,7 +37,9 @@ transform_img = transforms.Compose([transforms.Resize((256,256)),
 root = "C:\\Users\\Audensiel\\Desktop\\piccture_anotation\\Images"   
 dataset = CaptionDataset(image_annot, image_path, root, transform=transform_img)
 
-model_features = torchvision.models.resnet50(weights=ResNet50_Weights.DEFAULT)
+
+resnet_model = torchvision.models.resnet50(weights=ResNet50_Weights.DEFAULT)
+model_features = torch.nn.Sequential(*list(resnet50.children())[:-2])
 model_features.eval()
 
 test_resnet = Subset(dataset, indices=list(range(50)))
@@ -47,12 +49,14 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 model_features.to(device)
 
-all_outputs = []
+features = []
 
 with torch.no_grad():
    for batch_images, batch_captions in input_data:
       batch_images = batch_images.to(device)
       batch_outputs = model_features(batch_images)
+
+      all_outputs = features.extend(batch_outputs)
 
    for i in range(batch_images.shape[0]):
       image = batch_images[i].cpu().permute(1, 2, 0)
