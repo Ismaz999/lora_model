@@ -8,6 +8,7 @@ from torchvision.transforms import ToTensor
 from torchvision.models import resnet50, ResNet50_Weights
 from torch.utils.data import Dataset, Subset, DataLoader
 import matplotlib.pyplot as plt
+import torch.nn as nn
 
 from flickr8k_manager import CaptionDataset
 
@@ -56,12 +57,23 @@ with torch.no_grad():
       batch_images = batch_images.to(device)
       batch_outputs = model_features(batch_images)
 
-      all_outputs = features.extend(batch_outputs)
+      features.extend(batch_outputs)
 
-   for i in range(batch_images.shape[0]):
-      image = batch_images[i].cpu().permute(1, 2, 0)
-      output = batch_outputs[i] 
-            
-      plt.figure()
-      plt.imshow(image)
-      plt.show()
+class DecoderRNN(nn.Module):
+    def __init__(self, embed_size, hidden_size, vocab_size, num_layers=1):
+        super(DecoderRNN, self).__init__()
+        self.embed_size = embed_size
+        self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
+        self.num_layers = num_layers
+        
+        self.word_embedding = nn.Embedding(self.vocab_size, self.embed_size)
+        self.lstm = nn.LSTM(self.embed_size, 
+                            self.hidden_size, 
+                            self.num_layers, 
+                            batch_first=True)
+        
+        self.fc = nn.Linear(self.hidden_size, self.vocab_size)
+#         self.hidden = (torch.zeros(1, 1, self.hidden_size), torch.zeros(1, 1, self.hidden_size))
+        
+    
