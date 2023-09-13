@@ -16,7 +16,7 @@ from data_utils import transform_img, CaptionDataset, build_vocab, transform_cap
 import nltk
 from nltk.tokenize import word_tokenize
 
-# nltk.download('punkt')
+nltk.download('punkt')
 
 # Chargement des données
 
@@ -85,12 +85,11 @@ class DecoderRNN(nn.Module):
         self.linear = nn.Linear(hidden_size, vocab_size)
         self.dropout = nn.Dropout(0.5)
     def forward(self, features, captions):
-        # Prenez la moyenne des caractéristiques le long des dimensions 2 et 3 pour obtenir une forme de [32, 2048]
+
         features_avg = features.mean(dim=[2, 3])
 
         embeddings = self.dropout(self.embed(captions)).permute(1, 0, 2)
         
-        # Étendez les caractéristiques pour chaque étape temporelle
         features_repeated = features_avg.unsqueeze(1).expand(-1, embeddings.size(1), -1)
         
         embeddings = torch.cat((features_repeated, embeddings), dim=2)
@@ -138,10 +137,8 @@ for epoch in range(num_epochs):
         # Initialiser les gradients du décodeur à zéro
         decoder.zero_grad()
 
-        # Passe avant : Passer les features et les légendes transformées à travers le décodeur pour obtenir les prédictions
         outputs = decoder(features, captions_tensor)
 
-        # Calculer la perte
         loss = criterion(outputs.view(-1, vocab_size), captions_tensor.view(-1))
 
         # Rétropropagation
@@ -150,7 +147,6 @@ for epoch in range(num_epochs):
         # Mise à jour des poids
         optimizer.step()
 
-        # Afficher la perte de temps en temps
         if i % print_every == 0:
             print(f"Epoch {epoch+1}/{num_epochs}, Step {i}/{len(input_data)}, Loss: {loss.item()}")
 
