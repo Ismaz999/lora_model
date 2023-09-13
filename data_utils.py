@@ -25,30 +25,29 @@ def build_vocab(captions):
     
     return vocab
 
-def transform_caption(caption, vocab):
-    
-    tokens = caption.split()
-    
+def transform_caption(caption, vocab, max_length=50):
+    tokens = caption.split()  
+    # print("voici les tokens", tokens)
     indices = [vocab.get(token, vocab['<unk>']) for token in tokens]
-    return indices
+    while len(indices) < max_length:
+        indices.append(vocab["<pad>"])
+    return indices[:max_length]
 
 class CaptionDataset(torch.utils.data.Dataset):
-   def __init__(self, caption_array, image_path, root, transform=None, max_token_length=50): #Permet d'initialiser les variables avant d'accéder a un élément précis du dataset
+   def __init__(self, caption_array, image_path, root, vocab, transform=None, max_token_length=50): #Permet d'initialiser les variables avant d'accéder a un élément précis du dataset
 
       self.caption_array = caption_array
       self.root = root
       self.transform = transform
       self.image_path = image_path
       self.max_token_length = max_token_length
+      self.vocab = vocab
 
    def __getitem__(self, index): #Permet d'accéder à un élément spécifique du dataset
       annotation = self.caption_array[index]
       image_name = self.image_path[index]
-
-      #Tokenisation des captions:
-      tokens = word_tokenize(annotation)[:self.max_token_length]
-      while len(tokens) < self.max_token_length:
-         tokens.append("<PAD>")
+      
+      tokenized_annotation = transform_caption(annotation, self.vocab, self.max_token_length)
 
       image_path = os.path.join(self.root, image_name)
       img = Image.open(image_path).convert("RGB")
@@ -56,7 +55,7 @@ class CaptionDataset(torch.utils.data.Dataset):
       if self.transform:
             img = self.transform(img)
 
-      return img, tokens
+      return img, tokenized_annotation
    
    def __len__(self):
       return len(self.image_path)

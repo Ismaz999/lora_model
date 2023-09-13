@@ -16,7 +16,7 @@ from data_utils import transform_img, CaptionDataset, build_vocab, transform_cap
 import nltk
 from nltk.tokenize import word_tokenize
 
-nltk.download('punkt')
+# nltk.download('punkt')
 
 # Chargement des données
 
@@ -40,7 +40,16 @@ for ligne in file_content:
 
 root = "C:\\Users\\Audensiel\\Desktop\\piccture_anotation\\Images"
 
-dataset = CaptionDataset(image_annot, image_path, root, transform=transform_img)
+# Construction du vocabulaire
+vocab = build_vocab(image_annot)
+# print("le vocab:", vocab)
+vocab_size = len(vocab)
+
+if '<unk>' not in vocab:
+    vocab['<unk>'] = len(vocab)
+
+
+dataset = CaptionDataset(image_annot, image_path, root, vocab=vocab, transform=transform_img)
 
 # Prétraitement des données
 
@@ -48,7 +57,7 @@ resnet_model = torchvision.models.resnet50(weights=ResNet50_Weights.DEFAULT)
 model_features = torch.nn.Sequential(*list(resnet_model.children())[:-2])
 model_features.eval()
 
-test_resnet = Subset(dataset, indices=list(range(50)))
+test_resnet = Subset(dataset, indices=list(range(1000)))
 input_data = DataLoader(test_resnet, batch_size=32, shuffle=False, drop_last=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -61,108 +70,90 @@ with torch.no_grad():
         batch_images = batch_images.to(device)
         batch_outputs = model_features(batch_images)
 
+        batch_outputs = batch_outputs.mean(dim=[2, 3])
         features.extend(batch_outputs)
-
-# for images, tokens in input_data:
-#     print("Tokens:", tokens)
-
-# print("LIST DANNOT",image_annot)
 
 
 # Définition du modèle de décodage
 
 class DecoderRNN(nn.Module):
-    def __init__(self, feature, embed_size, hidden_size, vocab_size, num_layers=1):
+    def __init__(self, embed_size, hidden_size, vocab_size, vocab):
         super(DecoderRNN, self).__init__()
-        self.embed_size = embed_size
-        self.hidden_size = hidden_size
-        self.vocab_size = vocab_size
-        self.num_layers = num_layers
-        
-        self.word_embedding = nn.Embedding(self.vocab_size, self.embed_size)
-        
-        self.lstm = nn.LSTM(self.embed_size, 
-                            self.hidden_size, 
-                            self.num_layers, 
-                            batch_first=True)
-        
-        self.fc = nn.Linear(self.hidden_size, self.vocab_size)
-        self.hidden = (torch.zeros(1, 1, self.hidden_size), torch.zeros(1, 1, self.hidden_size))
-
+        self.vocab = vocab
+        self.embed = nn.Embedding(vocab_size, embed_size, padding_idx=vocab["<pad>"])
+        self.lstm = nn.LSTM(2048 + embed_size, hidden_size)
+        self.linear = nn.Linear(hidden_size, vocab_size)
+        self.dropout = nn.Dropout(0.5)
     def forward(self, features, captions):
-        # Embeddings des mots
-        captions = self.word_embedding(captions)
+        # Prenez la moyenne des caractéristiques le long des dimensions 2 et 3 pour obtenir une forme de [32, 2048]
+        features_avg = features.mean(dim=[2, 3])
+
+        embeddings = self.dropout(self.embed(captions)).permute(1, 0, 2)
         
-        # Concaténer les features de l'encodeur avec les embeddings des mots
-        features = features.unsqueeze(1)
-        inputs = torch.cat((features, captions), 1)
+        # Étendez les caractéristiques pour chaque étape temporelle
+        features_repeated = features_avg.unsqueeze(1).expand(-1, embeddings.size(1), -1)
         
-        # Passer à travers le LSTM
-        out, _ = self.lstm(inputs)
+        embeddings = torch.cat((features_repeated, embeddings), dim=2)
         
-        # Passer à travers la couche de sortie
-        out = self.fc(out)
+        hiddens, _ = self.lstm(embeddings)
+        outputs = self.linear(hiddens)
+        return outputs
         
-        return out
-        
-captions = image_annot
-vocab = build_vocab(captions)
+features_tensor = torch.stack(features)
 
-if '<unk>' not in vocab:
-    vocab['<unk>'] = len(vocab)
+captions_transformed = [transform_caption(caption, vocab) for caption in image_annot[:len(features)]]
 
-indices = [transform_caption(caption, vocab) for caption in captions]
+captions_tensor = torch.tensor(captions_transformed)
 
-all_tokens = []
+EMBED_SIZE = 256
+HIDDEN_SIZE = 512
 
-for indices_par_images in indices:
-    all_tokens.extend(indices_par_images)
-                    
-tokens = torch.tensor(all_tokens).to(device)
+decoder = DecoderRNN(EMBED_SIZE, HIDDEN_SIZE, vocab_size, vocab).to(device)
+criterion = nn.CrossEntropyLoss(ignore_index=vocab["<pad>"])
+optimizer = optim.Adam(decoder.parameters(), lr=0.001)
 
-embed_size = 256
-hidden_size = 512
-vocab_size = len(vocab)
+# Paramètres d'entraînement
+num_epochs = 10
+print_every = 10
 
-decoder = DecoderRNN(features, embed_size, hidden_size, vocab_size)
-
-# Définition de la fonction de perte (entropie croisée) pour l'entraînement
-criterion = nn.CrossEntropyLoss()
-
-# Optimiseur pour la mise à jour des poids du décodeur
-decoder_optimizer = optim.Adam(decoder.parameters(), lr=0.001)  # Vous pouvez ajuster le taux d'apprentissage (learning rate) si nécessaire
-
-# Nombre d'époques d'entraînement
-num_epochs = 10  # Vous pouvez ajuster ce nombre en fonction de la convergence
-
-decoder.to(device)  # Transférer le décodeur sur le GPU si disponible
-
+# Boucle d'entraînement
 for epoch in range(num_epochs):
-    for batch_images, batch_tokens in input_data:
-        # Transférez les données sur le GPU si disponible
-        batch_images = batch_images.to(device)   
+    
+    for i, (images, captions) in enumerate(input_data):
+        # Mettre les images et les légendes sur le périphérique approprié
+        images = images.to(device)
 
-        batch_indices = [transform_caption(' '.join(caption), vocab) for caption in batch_captions]
+        # print(type(captions))
+        # print(len(captions))
+        # if isinstance(captions, list):
+        #     for item in captions:
+        #         print(type(item), len(item))
 
-        tensor_batch_captions = torch.LongTensor(batch_indices)
-        tensor_batch_captions = tensor_batch_captions.to(device)
+        captions_tensor = torch.stack(captions).to(device)
 
-        # Réinitialisez les gradients
-        decoder_optimizer.zero_grad()
-        
-        # Passez l'image à travers l'encodeur pour obtenir les caractéristiques
-        features = model_features(batch_images)
-        
-        # Passez les caractéristiques de l'image et les légendes au décodeur
-        batch_tokens_tensor = torch.tensor(batch_tokens).to(device)
-        outputs = decoder(features, batch_tokens_tensor)
-        
-        # Calculez la perte en comparant les prédictions aux légendes réelles
-        loss = criterion(outputs.view(-1, vocab_size), batch_tokens.view(-1))  # Aplatissez les tenseurs
-        
-        # Effectuez une rétropropagation pour mettre à jour les poids du décodeur
+        # Récupérer les features des images à l'aide du modèle ResNet pré-entraîné
+        with torch.no_grad():
+            features = model_features(images)
+
+        # Initialiser les gradients du décodeur à zéro
+        decoder.zero_grad()
+
+        # Passe avant : Passer les features et les légendes transformées à travers le décodeur pour obtenir les prédictions
+        outputs = decoder(features, captions_tensor)
+
+        # Calculer la perte
+        loss = criterion(outputs.view(-1, vocab_size), captions_tensor.view(-1))
+
+        # Rétropropagation
         loss.backward()
-        decoder_optimizer.step()
-        
-    # Affichez la perte à la fin de chaque époque
-    print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+        # Mise à jour des poids
+        optimizer.step()
+
+        # Afficher la perte de temps en temps
+        if i % print_every == 0:
+            print(f"Epoch {epoch+1}/{num_epochs}, Step {i}/{len(input_data)}, Loss: {loss.item()}")
+
+
+
+
