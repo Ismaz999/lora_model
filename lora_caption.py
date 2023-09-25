@@ -16,7 +16,7 @@ from data_utils import transform_img, CaptionDataset, build_vocab, transform_cap
 import nltk
 from nltk.tokenize import word_tokenize
 
-nltk.download('punkt')
+# nltk.download('punkt')
 
 # Chargement des données
 
@@ -58,7 +58,7 @@ model_features = torch.nn.Sequential(*list(resnet_model.children())[:-2])
 model_features.eval()
 
 test_resnet = Subset(dataset, indices=list(range(1000)))
-input_data = DataLoader(test_resnet, batch_size=32, shuffle=False, drop_last=True)
+input_data = DataLoader(test_resnet, batch_size=16, shuffle=False, drop_last=True)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model_features.to(device)
@@ -104,52 +104,61 @@ captions_transformed = [transform_caption(caption, vocab) for caption in image_a
 
 captions_tensor = torch.tensor(captions_transformed)
 
-EMBED_SIZE = 256
-HIDDEN_SIZE = 512
+EMBED_SIZE = [256, 512]
+HIDDEN_SIZE = [512, 1024]
+LEARNING_RATE = [0.001, 0.01]
+WEIGHT_DECAYS = [1e-5, 1e-4]
 
-decoder = DecoderRNN(EMBED_SIZE, HIDDEN_SIZE, vocab_size, vocab).to(device)
-criterion = nn.CrossEntropyLoss(ignore_index=vocab["<pad>"])
-optimizer = optim.Adam(decoder.parameters(), lr=0.001)
+best_loss = float('inf')
+best_params = {}
+
+# decoder = DecoderRNN(EMBED_SIZE, HIDDEN_SIZE, vocab_size, vocab).to(device)
+# criterion = nn.CrossEntropyLoss(ignore_index=vocab["<pad>"])
+# optimizer = optim.Adam(decoder.parameters(), lr=0.001, weight_decay=1e-5)
+
 
 # Paramètres d'entraînement
 num_epochs = 10
 print_every = 10
 
 # Boucle d'entraînement
-for epoch in range(num_epochs):
-    
-    for i, (images, captions) in enumerate(input_data):
-        # Mettre les images et les légendes sur le périphérique approprié
-        images = images.to(device)
+for lr in LEARNING_RATE:
+    for embed_size in EMBED_SIZE:
+        for hidden_size in HIDDEN_SIZE:
+            for weight_decay in WEIGHT_DECAYS:
+                
+                decoder = DecoderRNN(embed_size, hidden_size, vocab_size, vocab).to(device)
+                criterion = nn.CrossEntropyLoss(ignore_index=vocab["<pad>"])
+                optimizer = optim.Adam(decoder.parameters(), lr=lr, weight_decay=weight_decay)
 
-        # print(type(captions))
-        # print(len(captions))
-        # if isinstance(captions, list):
-        #     for item in captions:
-        #         print(type(item), len(item))
+                total_loss = 0
+                for epoch in range(num_epochs):
+                    for i, (images, captions) in enumerate(input_data):
+                        images = images.to(device)
+                        captions_tensor = torch.stack(captions).to(device)
+                        
+                        with torch.no_grad():
+                            features = model_features(images)
+                        
+                        decoder.zero_grad()
+                        outputs = decoder(features, captions_tensor)
+                        loss = criterion(outputs.view(-1, vocab_size), captions_tensor.view(-1))
+                        
+                        loss.backward()
+                        optimizer.step()
+                        total_loss += loss.item()
 
-        captions_tensor = torch.stack(captions).to(device)
+                avg_loss = total_loss / (num_epochs * len(input_data))
+                print(f"LR: {lr}, Embed Size: {embed_size}, Hidden Size: {hidden_size}, Weight Decay: {weight_decay}, Avg Loss: {avg_loss}")
 
-        # Récupérer les features des images à l'aide du modèle ResNet pré-entraîné
-        with torch.no_grad():
-            features = model_features(images)
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
+                    best_params = {
+                        "learning_rate": lr,
+                        "embedding_size": embed_size,
+                        "hidden_size": hidden_size,
+                        "weight_decay": weight_decay
+                    }
 
-        # Initialiser les gradients du décodeur à zéro
-        decoder.zero_grad()
-
-        outputs = decoder(features, captions_tensor)
-
-        loss = criterion(outputs.view(-1, vocab_size), captions_tensor.view(-1))
-
-        # Rétropropagation
-        loss.backward()
-
-        # Mise à jour des poids
-        optimizer.step()
-
-        if i % print_every == 0:
-            print(f"Epoch {epoch+1}/{num_epochs}, Step {i}/{len(input_data)}, Loss: {loss.item()}")
-
-
-
+print("Meilleurs paramètres:", best_params)
 
